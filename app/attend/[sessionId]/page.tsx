@@ -15,8 +15,10 @@ export default async function AttendPage({ params }: PageProps) {
   const { sessionId } = await params;
 
   return (
-    <main className="flex-1 w-full max-w-md mx-auto px-4 py-8 md:py-16 flex flex-col justify-center min-h-[85vh]">
-      <AttendForm sessionId={sessionId} />
-    </main>
+    <div className="min-h-screen w-full bg-gradient-to-tr from-indigo-100/60 via-slate-50 to-pink-100/60 text-slate-900 flex flex-col justify-center items-center py-6 px-4">
+      <main className="w-full max-w-lg mx-auto flex flex-col justify-center">
+        <AttendForm sessionId={sessionId} />
+      </main>
+    </div>
   );
 }

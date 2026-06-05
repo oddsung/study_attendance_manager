@@ -1,20 +1,22 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { supabase } from '@/lib/supabase';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<any> }
 ) {
   try {
-    const { id } = await params;
-    const meeting = db.getMeeting(id);
-    if (!meeting) {
-      return NextResponse.json({ error: '존재하지 않는 모임입니다.' }, { status: 404 });
-    }
-    const members = db.getMembers(id);
-    return NextResponse.json(members);
-  } catch (error) {
-    return NextResponse.json({ error: '멤버 목록을 불러오는 도중 오류가 발생했습니다.' }, { status: 500 });
+    const { id: meetingId } = await params;
+    const { data, error } = await supabase
+      .from('members')
+      .select('*')
+      .eq('meeting_id', meetingId)
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    return NextResponse.json(data || []);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || '멤버 목록을 불러오는 도중 오류가 발생했습니다.' }, { status: 500 });
   }
 }
 
@@ -23,22 +25,52 @@ export async function POST(
   { params }: { params: Promise<any> }
 ) {
   try {
-    const { id } = await params;
+    const { id: meetingId } = await params;
     const body = await request.json();
-    const { name, department } = body;
 
-    if (!name || !department) {
-      return NextResponse.json({ error: '이름과 소속 부서는 필수 입력 항목입니다.' }, { status: 400 });
+    if (Array.isArray(body)) {
+      const membersToInsert = body
+        .map((item: any) => ({
+          meeting_id: meetingId,
+          name: item.name?.trim(),
+          department: item.department?.trim() || '',
+        }))
+        .filter((item: any) => item.name);
+
+      if (membersToInsert.length === 0) {
+        return NextResponse.json({ error: '등록할 유효한 이름이 없습니다.' }, { status: 400 });
+      }
+
+      const { data, error } = await supabase
+        .from('members')
+        .insert(membersToInsert)
+        .select();
+
+      if (error) throw error;
+      return NextResponse.json(data, { status: 201 });
+    } else {
+      const { name, department } = body;
+
+      if (!name) {
+        return NextResponse.json({ error: '이름은 필수 입력 항목입니다.' }, { status: 400 });
+      }
+
+      const { data, error } = await supabase
+        .from('members')
+        .insert([
+          {
+            meeting_id: meetingId,
+            name: name.trim(),
+            department: department?.trim() || '',
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      return NextResponse.json(data, { status: 201 });
     }
-
-    const meeting = db.getMeeting(id);
-    if (!meeting) {
-      return NextResponse.json({ error: '존재하지 않는 모임입니다.' }, { status: 404 });
-    }
-
-    const newMember = db.addMember(id, name, department);
-    return NextResponse.json(newMember, { status: 201 });
-  } catch (error) {
-    return NextResponse.json({ error: '멤버 추가 중 오류가 발생했습니다.' }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || '멤버 추가 중 오류가 발생했습니다.' }, { status: 500 });
   }
 }

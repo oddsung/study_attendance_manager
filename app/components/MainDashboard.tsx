@@ -11,6 +11,9 @@ export default function MainDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [defaultStartTime, setDefaultStartTime] = useState('19:00');
+  const [defaultLateTime, setDefaultLateTime] = useState('19:10');
+  const [defaultEndTime, setDefaultEndTime] = useState('21:00');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,10 +39,13 @@ export default function MainDashboard() {
     setIsSubmitting(true);
     setError('');
     try {
-      const newMeeting = await createMeeting(title, description);
+      const newMeeting = await createMeeting(title, description, defaultStartTime, defaultLateTime, defaultEndTime);
       setMeetings([newMeeting, ...meetings]);
       setTitle('');
       setDescription('');
+      setDefaultStartTime('19:00');
+      setDefaultLateTime('19:10');
+      setDefaultEndTime('21:00');
       setIsModalOpen(false);
     } catch (err) {
       console.error('Failed to create meeting:', err);
@@ -114,17 +120,30 @@ export default function MainDashboard() {
             <Link
               key={meeting.id}
               href={`/meeting/${meeting.id}`}
-              className="group relative flex flex-col p-6 rounded-2xl glass-panel hover-lift border border-gray-200 dark:border-gray-800 hover:border-indigo-500/30 dark:hover:border-indigo-400/20"
+              className={`group relative flex flex-col p-6 rounded-2xl glass-panel hover-lift border border-gray-200 dark:border-gray-800 hover:border-indigo-500/30 dark:hover:border-indigo-400/20 ${
+                meeting.is_closed ? 'opacity-70 hover:opacity-90' : ''
+              }`}
             >
               <div className="flex-1 space-y-4">
                 <div className="flex items-start justify-between">
-                  <div className="p-3 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                  <div className={`p-3 rounded-xl ${
+                    meeting.is_closed 
+                      ? 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400' 
+                      : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400'
+                  }`}>
                     <BookOpen className="w-6 h-6" />
                   </div>
-                  <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" />
-                    {new Date(meeting.created_at).toLocaleDateString()}
-                  </span>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5" />
+                      {new Date(meeting.created_at).toLocaleDateString()}
+                    </span>
+                    {meeting.is_closed && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border border-rose-100/50 dark:border-rose-950/30">
+                        종료됨
+                      </span>
+                    )}
+                  </div>
                 </div>
                 
                 <div className="space-y-1">
@@ -186,6 +205,45 @@ export default function MainDashboard() {
                   rows={3}
                   className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-800 bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
                 />
+              </div>
+
+              <div className="bg-gray-50/50 dark:bg-gray-900/30 p-3 rounded-xl border border-gray-100 dark:border-gray-800/80 space-y-3">
+                <div className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">회차 생성 시 적용할 기본 시간 설정 (5분 단위)</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400">시작 시간</label>
+                    <input
+                      type="time"
+                      required
+                      step="300"
+                      value={defaultStartTime}
+                      onChange={(e) => setDefaultStartTime(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400">지각 기준</label>
+                    <input
+                      type="time"
+                      required
+                      step="300"
+                      value={defaultLateTime}
+                      onChange={(e) => setDefaultLateTime(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 dark:text-gray-400">종료 시간</label>
+                    <input
+                      type="time"
+                      required
+                      step="300"
+                      value={defaultEndTime}
+                      onChange={(e) => setDefaultEndTime(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center gap-3 pt-4">

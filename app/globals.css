@@ -169,6 +169,10 @@ body {
     font-weight: bold !important;
     margin-bottom: 5px !important;
   }
+
+  .print-center {
+    text-align: center !important;
+  }
 }
 
 .print-only-header {
