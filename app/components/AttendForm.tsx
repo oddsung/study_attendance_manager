@@ -1,7 +1,16 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { getSession, submitAttendance, getMeeting, Session, Meeting } from '@/lib/api';
+import { 
+  getSession, 
+  submitAttendance, 
+  getMeeting, 
+  getSessions, 
+  getMeetingAttendances, 
+  Session, 
+  Meeting, 
+  Attendance 
+} from '@/lib/api';
 import { 
   CheckCircle2, 
   AlertCircle, 
@@ -21,6 +30,32 @@ interface AttendFormProps {
   sessionId: string;
 }
 
+const isSessionFinished = (session: Session) => {
+  if (!session.date || !session.end_time) return false;
+  try {
+    const now = new Date();
+    const koreaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+    const yyyy = koreaDate.getFullYear();
+    const mm = String(koreaDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(koreaDate.getDate()).padStart(2, '0');
+    const currentDateStr = `${yyyy}-${mm}-${dd}`;
+    
+    if (currentDateStr > session.date) return true;
+    if (currentDateStr === session.date) {
+      const currentHour = koreaDate.getHours();
+      const currentMinute = koreaDate.getMinutes();
+      const currentTimeVal = currentHour * 60 + currentMinute;
+      
+      const [endHour, endMinute] = session.end_time.split(':').map(Number);
+      const endTimeVal = (endHour || 0) * 60 + (endMinute || 0);
+      return currentTimeVal > endTimeVal;
+    }
+  } catch (e) {
+    console.error('Error checking if session is finished:', e);
+  }
+  return false;
+};
+
 export default function AttendForm({ sessionId }: AttendFormProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [meeting, setMeeting] = useState<Meeting | null>(null);
@@ -36,13 +71,13 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
   
   // Attendance completion states
   const [isAttended, setIsAttended] = useState(false);
-  const [attendanceDetail, setAttendanceDetail] = useState<{
-    member_name: string;
-    employee_number: string;
-    department: string;
-    status: '출석' | '지각' | '결석';
-    attended_at: string;
-  } | null>(null);
+  const [attendanceDetail, setAttendanceDetail] = useState<Attendance | null>(null);
+
+  // History states
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySessions, setHistorySessions] = useState<Session[]>([]);
+  const [historyAttendances, setHistoryAttendances] = useState<Attendance[]>([]);
+  const [historyError, setHistoryError] = useState('');
 
   // Service Worker 등록 (ngrok 인터스티셜 바이패스)
   useEffect(() => {
@@ -104,6 +139,12 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
         const parsed = JSON.parse(saved);
         setIsAttended(true);
         setAttendanceDetail(parsed);
+      } else {
+        // 1-2. 최근 출석 정보가 있으면 입력 필드 자동 완성 (편의성 제공)
+        const savedName = localStorage.getItem('last_attended_name');
+        const savedDept = localStorage.getItem('last_attended_department');
+        if (savedName) setName(savedName);
+        if (savedDept) setDepartment(savedDept);
       }
     } catch (e) {
       console.warn('LocalStorage is blocked or not supported on this browser/mode:', e);
@@ -125,6 +166,32 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
 
     return () => clearTimeout(timeoutId);
   }, [sessionId, loadSessionData]);
+
+  // 이전 출석 내역 로드 함수
+  const fetchHistory = useCallback(async () => {
+    if (!meeting?.id || !attendanceDetail) return;
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const [sessionsData, attendancesData] = await Promise.all([
+        getSessions(meeting.id),
+        getMeetingAttendances(meeting.id),
+      ]);
+      setHistorySessions(sessionsData);
+      setHistoryAttendances(attendancesData);
+    } catch (err) {
+      console.error('Failed to load attendance history:', err);
+      setHistoryError('출석 내역을 불러오는 중 오류가 발생했습니다.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [meeting?.id, attendanceDetail]);
+
+  useEffect(() => {
+    if (isAttended && meeting?.id && attendanceDetail) {
+      fetchHistory();
+    }
+  }, [isAttended, meeting?.id, attendanceDetail, fetchHistory]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,21 +227,14 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
         deviceToken
       );
 
-      // 성공 데이터 상태 세팅
-      const attInfo = {
-        member_name: result.member_name,
-        employee_number: result.employee_number,
-        department: result.department,
-        status: result.status,
-        attended_at: result.attended_at,
-      };
-      
-      setAttendanceDetail(attInfo);
+      setAttendanceDetail(result);
       setIsAttended(true);
 
       // 브라우저에 출석 처리 기록 (중복 방지용 - 예외 처리 포함)
       try {
-        localStorage.setItem(`attended_session_${sessionId}`, JSON.stringify(attInfo));
+        localStorage.setItem(`attended_session_${sessionId}`, JSON.stringify(result));
+        localStorage.setItem('last_attended_name', result.member_name);
+        localStorage.setItem('last_attended_department', result.department);
       } catch (e) {
         console.warn('Could not save attendance to localStorage due to browser restrictions:', e);
       }
@@ -192,6 +252,30 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
       setIsSubmitting(false);
     }
   };
+
+  // 내역 통계 계산
+  const userAttendances = attendanceDetail 
+    ? historyAttendances.filter(
+        a => a.member_name.trim() === attendanceDetail.member_name.trim() && 
+             a.department.trim() === attendanceDetail.department.trim()
+      )
+    : [];
+
+  const attendedCount = userAttendances.filter(a => a.status === '출석').length;
+  const tardyCount = userAttendances.filter(a => a.status === '지각').length;
+  const manualAbsentCount = userAttendances.filter(a => a.status === '결석').length;
+
+  const autoAbsentCount = historySessions.filter(s => {
+    const finished = isSessionFinished(s);
+    const hasRecord = userAttendances.some(a => a.session_id === s.id);
+    return finished && !hasRecord;
+  }).length;
+
+  const absentCount = manualAbsentCount + autoAbsentCount;
+  const totalSessions = historySessions.length;
+  const attendanceRate = totalSessions > 0 
+    ? Math.round(((attendedCount + tardyCount) / totalSessions) * 100)
+    : 0;
 
   if (isLoading) {
     return (
@@ -299,6 +383,150 @@ export default function AttendForm({ sessionId }: AttendFormProps) {
                 {new Date(attendanceDetail.attended_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </div>
+          </div>
+
+          {/* 나의 출석 히스토리 섹션 */}
+          <div className="border-t-2 border-dashed border-indigo-100 pt-8 mt-6 text-left">
+            <h4 className="text-xl font-black text-slate-900 flex items-center gap-2 mb-5">
+              <span className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
+                <FileText className="w-5.5 h-5.5" />
+              </span>
+              <span>나의 출석 히스토리</span>
+            </h4>
+
+            {historyLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 space-y-3">
+                <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+                <p className="text-sm font-semibold text-slate-500">이전 출석 내역을 가져오고 있습니다...</p>
+              </div>
+            ) : historyError ? (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl text-sm font-medium flex items-center justify-between">
+                <span>{historyError}</span>
+                <button 
+                  onClick={fetchHistory}
+                  className="px-3 py-1 bg-white hover:bg-rose-100 border border-rose-300 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                >
+                  재시도
+                </button>
+              </div>
+            ) : historySessions.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-6">등록된 회차가 없습니다.</p>
+            ) : (
+              <div className="space-y-4">
+                {/* 요약 대시보드 카드 */}
+                <div className="bg-indigo-50/30 border border-indigo-100/80 rounded-2xl p-4.5 grid grid-cols-4 gap-2 text-center">
+                  <div className="bg-white p-2.5 rounded-xl border border-indigo-50 shadow-sm flex flex-col justify-center">
+                    <span className="block text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">출석률</span>
+                    <span className="text-xl font-black text-indigo-600">{attendanceRate}%</span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-xl border border-indigo-50 shadow-sm flex flex-col justify-center">
+                    <span className="block text-[10px] font-extrabold text-emerald-500 uppercase tracking-wider">출석</span>
+                    <span className="text-xl font-black text-emerald-600">{attendedCount}회</span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-xl border border-indigo-50 shadow-sm flex flex-col justify-center">
+                    <span className="block text-[10px] font-extrabold text-amber-500 uppercase tracking-wider">지각</span>
+                    <span className="text-xl font-black text-amber-600">{tardyCount}회</span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-xl border border-indigo-50 shadow-sm flex flex-col justify-center">
+                    <span className="block text-[10px] font-extrabold text-rose-500 uppercase tracking-wider">결석</span>
+                    <span className="text-xl font-black text-rose-600">{absentCount}회</span>
+                  </div>
+                </div>
+
+                {/* 회차 목록 타임라인 */}
+                <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                  {historySessions.map((s) => {
+                    const att = historyAttendances.find(
+                      a => a.session_id === s.id && 
+                           a.member_name.trim() === attendanceDetail.member_name.trim() && 
+                           a.department.trim() === attendanceDetail.department.trim()
+                    );
+                    
+                    const isCurrent = s.id === sessionId;
+                    const finished = isSessionFinished(s);
+
+                    let statusLabel = '대기 중';
+                    let badgeClass = 'bg-slate-100 text-slate-600 border-slate-200';
+                    let statusIcon = <Calendar className="w-4 h-4 text-slate-400" />;
+                    let detailText = '';
+
+                    if (att) {
+                      if (att.status === '출석') {
+                        statusLabel = '출석';
+                        badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                        statusIcon = <CheckCircle2 className="w-4 h-4 text-emerald-600" />;
+                        detailText = new Date(att.attended_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      } else if (att.status === '지각') {
+                        statusLabel = '지각';
+                        badgeClass = 'bg-amber-50 text-amber-700 border-amber-200';
+                        statusIcon = <Clock className="w-4 h-4 text-amber-600" />;
+                        detailText = new Date(att.attended_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                      } else if (att.status === '결석') {
+                        statusLabel = '결석';
+                        badgeClass = 'bg-rose-50 text-rose-700 border-rose-200';
+                        statusIcon = <AlertCircle className="w-4 h-4 text-rose-600" />;
+                        detailText = att.memo || '결석 처리됨';
+                      }
+                    } else if (finished) {
+                      statusLabel = '결석';
+                      badgeClass = 'bg-rose-50 text-rose-700 border-rose-200';
+                      statusIcon = <AlertCircle className="w-4 h-4 text-rose-600" />;
+                      detailText = '결석 (미출석)';
+                    }
+
+                    return (
+                      <div 
+                        key={s.id} 
+                        className={`flex items-center justify-between p-3.5 rounded-2xl border transition-all ${
+                          isCurrent 
+                            ? 'bg-indigo-50/40 border-indigo-200 ring-2 ring-indigo-100' 
+                            : 'bg-white border-slate-100 hover:bg-slate-50/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                            isCurrent ? 'bg-indigo-50 border border-indigo-100' : 'bg-slate-50 border border-slate-100'
+                          }`}>
+                            {statusIcon}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-sm font-black truncate ${isCurrent ? 'text-indigo-900' : 'text-slate-800'}`}>
+                                {s.title}
+                              </span>
+                              {isCurrent && (
+                                <span className="inline-flex px-1.5 py-0.5 text-[9px] font-extrabold text-indigo-700 bg-indigo-100 rounded border border-indigo-200 animate-pulse">
+                                  현재 회차
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] font-bold text-slate-400 block mt-0.5">
+                              일시: {s.date} {s.start_time.substring(0, 5)}
+                            </span>
+                            {att?.memo && (
+                              <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100 block mt-1 w-fit">
+                                💬 메모: {att.memo}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1 shrink-0">
+                          <span className={`px-2.5 py-0.5 text-[10px] font-black rounded-lg border uppercase tracking-wider ${badgeClass}`}>
+                            {statusLabel}
+                          </span>
+                          {detailText && (
+                            <span className="text-[10px] font-bold text-slate-500">
+                              {detailText}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="text-base font-bold text-slate-700 text-center leading-relaxed bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100">
